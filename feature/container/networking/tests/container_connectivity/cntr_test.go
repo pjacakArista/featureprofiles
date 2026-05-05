@@ -37,7 +37,10 @@ import (
 	"github.com/openconfig/ondatra/gnmi"
 	"github.com/openconfig/ondatra/gnmi/oc"
 	"github.com/openconfig/ygot/ygot"
+	"crypto/tls"
+
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/encoding/prototext"
 
 	cpb "github.com/openconfig/featureprofiles/internal/cntrsrv/proto/cntr"
@@ -90,7 +93,16 @@ func dialContainer(t *testing.T, ctx context.Context, dut *ondatra.DUTDevice, po
 		t.Skipf("BindingDUT %T does not implement DialGRPCWithPort, which is required for this test: %v", bindingDUT, err)
 	}
 
-	conn, err := dialer.DialGRPCWithPort(ctx, port)
+	var dialOpts []grpc.DialOption
+	switch dut.Vendor() {
+	case ondatra.ARISTA:
+		// cntrsrv serves a self-signed TLS certificate. The binding defaults
+		// to insecure transport for container ports; override with TLS
+		// skip-verify so the handshake succeeds without a trusted CA.
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(
+			credentials.NewTLS(&tls.Config{InsecureSkipVerify: true}))) // NOLINT
+	}
+	conn, err := dialer.DialGRPCWithPort(ctx, port, dialOpts...)
 	if err != nil {
 		t.Fatalf("DialGRPCWithPort failed: %v", err)
 	}

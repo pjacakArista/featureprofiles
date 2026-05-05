@@ -22,6 +22,8 @@ import (
 
 	"github.com/openconfig/containerz/client"
 	"github.com/openconfig/featureprofiles/internal/deviations"
+	"github.com/openconfig/featureprofiles/internal/helpers"
+	gpb "github.com/openconfig/gnmi/proto/gnmi"
 	"github.com/openconfig/ondatra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,11 +34,11 @@ import (
 // Client returns a new containerz client.
 func Client(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
 	t.Helper()
-	gnoiClient := dut.RawAPIs().GNOI(t)
 	switch dut.Vendor() {
 	case ondatra.ARISTA:
+		var config string
 		if deviations.ContainerzOCUnsupported(dut) {
-			dut.Config().New().WithAristaText(`
+			config = `
 				management api gnoi
 				service containerz
 				  transport gnmi default
@@ -44,15 +46,33 @@ func Client(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
 				  container runtime
 					 vrf mgmt
 				!
-			`).Append(t)
+				ipv6 access-list restrict-access-ipv6
+				  10030 permit tcp any any eq 60061
+				  20000 permit ipv6 any any
+				system control-plane
+				  ipv6 access-group restrict-access-ipv6 vrf MGMT in
+			`
+		} else {
+			config = `
+				ipv6 access-list restrict-access-ipv6
+				  10030 permit tcp any any eq 60061
+				  20000 permit ipv6 any any
+				system control-plane
+				  ipv6 access-group restrict-access-ipv6 vrf MGMT in
+			`
 		}
-		dut.Config().New().WithAristaText(`
-			ipv6 access-list restrict-access-ipv6
-			  ! open port for cntrsrv from PROD
-			  permit tcp any any eq 60061
-		`).Append(t)
+		helpers.GnmiCLIConfig(t, dut, config)
+		// Configuring the containerz gNOI service may cause Octa to restart,
+		// making gNMI temporarily unavailable. Retry write memory until it
+		// succeeds or we exceed the deadline.
+		gnmiSaveWithRetry(t, dut, 2*time.Minute)
 		t.Logf("Waiting for device to ingest its config.")
 		time.Sleep(time.Minute)
+		// EOS's system control-plane ACL is accepted by EOS but may not translate
+		// to a kernel firewall rule on all EOS versions. Insert a direct ip6tables
+		// ACCEPT rule into the management namespace as a reliable fallback. The
+		// default INPUT policy in ns-mgmt is DROP for unlisted ports.
+		openMgmtPort(t, dut, 60061)
 	case ondatra.CISCO:
 		dut.Config().New().WithCiscoText(`
 			appmgr docker allow-sensitive-paths
@@ -68,7 +88,82 @@ func Client(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
 		t.Fatalf("Unsupported vendor for containerz: %v", dut.Vendor())
 	}
 
+	// Re-dial gNOI after config push -- configuring the containerz service may
+	// have restarted Octa, making any prior gNOI connection stale.
+	if _, err := dut.RawAPIs().BindingDUT().DialGNOI(context.Background()); err != nil {
+		t.Logf("gNOI re-dial in Client() failed (non-fatal): %v", err)
+	}
+	gnoiClient := dut.RawAPIs().GNOI(t)
 	return client.NewClientFromStub(gnoiClient.Containerz())
+}
+
+// openMgmtPort inserts an ip6tables ACCEPT rule into EOS's management namespace
+// (ns-mgmt) so that external clients can reach the container's gRPC service on
+// the given port. EOS's default INPUT policy in ns-mgmt is DROP; the
+// system control-plane ACL mechanism is pushed via gNMI but is not enforced as
+// a kernel firewall rule on all EOS versions, so a direct ip6tables insert is
+// used as a reliable fallback.
+func openMgmtPort(t *testing.T, dut *ondatra.DUTDevice, port int) {
+	t.Helper()
+	dut.CLI().Run(t, fmt.Sprintf("enable\nbash sudo ip netns exec ns-mgmt ip6tables -I EOS_INPUT 1 -p tcp --dport %d -j ACCEPT", port))
+	t.Logf("Opened container port %d in EOS management namespace ip6tables.", port)
+}
+
+// SaveConfig saves running-config to startup-config so it persists across reboots.
+func SaveConfig(t *testing.T, dut *ondatra.DUTDevice) {
+	t.Helper()
+	helpers.GnmiCLIConfig(t, dut, "write memory")
+}
+
+// ClientWithoutConfig returns a containerz client without pushing any config.
+// Use after a reboot when the config was already saved to startup-config.
+// Caller must invalidate the gNOI cache (via ResetGNOI) before calling this,
+// otherwise GNOI(t) returns a stale connection from before the reboot.
+func ClientWithoutConfig(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
+	t.Helper()
+	gnoiClient := dut.RawAPIs().GNOI(t)
+	return client.NewClientFromStub(gnoiClient.Containerz())
+}
+
+// gnmiSaveWithRetry retries "write memory" via gNMI until it succeeds or the
+// deadline elapses. This handles transient Octa restarts after config changes.
+func gnmiSaveWithRetry(t *testing.T, dut *ondatra.DUTDevice, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for attempt := 1; ; attempt++ {
+		gnmiClient := dut.RawAPIs().GNMI(t)
+		req, err := buildGNMICLISetRequest("write memory")
+		if err != nil {
+			t.Fatalf("Cannot build gNMI SetRequest for write memory: %v", err)
+		}
+		_, err = gnmiClient.Set(context.Background(), req)
+		if err == nil {
+			t.Logf("write memory succeeded (attempt %d)", attempt)
+			return
+		}
+		t.Logf("write memory attempt %d failed: %v", attempt, err)
+		if time.Now().After(deadline) {
+			t.Fatalf("write memory did not succeed within %v (last error: %v)", timeout, err)
+		}
+		time.Sleep(10 * time.Second)
+	}
+}
+
+// buildGNMICLISetRequest builds a gNMI SetRequest with CLI origin.
+func buildGNMICLISetRequest(config string) (*gpb.SetRequest, error) {
+	return &gpb.SetRequest{
+		Update: []*gpb.Update{{
+			Path: &gpb.Path{
+				Origin: "cli",
+				Elem:   []*gpb.PathElem{},
+			},
+			Val: &gpb.TypedValue{
+				Value: &gpb.TypedValue_AsciiVal{
+					AsciiVal: config,
+				},
+			},
+		}},
+	}, nil
 }
 
 // StartContainerOptions holds parameters for starting a container.
@@ -258,28 +353,44 @@ func WaitForRunning(ctx context.Context, t *testing.T, cli *client.Client, insta
 	defer cancel()
 
 	for {
-		listContCh, err := cli.ListContainer(pollCtx, true, 0, map[string][]string{"name": {instanceName}})
+		// Use a per-call timeout so one slow RPC does not consume the entire budget.
+		callCtx, callCancel := context.WithTimeout(pollCtx, 30*time.Second)
+		listContCh, err := cli.ListContainer(callCtx, true, 0, map[string][]string{"name": {instanceName}})
 		if err != nil {
-			return fmt.Errorf("unable to list container %s during polling: %w", instanceName, err)
+			callCancel()
+			t.Logf("ListContainer call for %s failed (will retry): %v", instanceName, err)
+			if pollCtx.Err() != nil {
+				return fmt.Errorf("timed out waiting for container %s to be RUNNING", instanceName)
+			}
+			time.Sleep(5 * time.Second)
+			continue
 		}
 
 		var containerIsRunning bool
+		var lastErr error
 		for info := range listContCh {
 			if info.Error != nil {
-				return fmt.Errorf("error message received while listing container %s during polling: %w", instanceName, info.Error)
+				lastErr = info.Error
+				t.Logf("ListContainer stream error for %s (will retry): %v", instanceName, info.Error)
+				break
 			}
+			t.Logf("ListContainer found: name=%s, image=%s, state=%s", info.Name, info.ImageName, info.State)
 			if (info.Name == instanceName || info.Name == "/"+instanceName) && info.State == cpb.ListContainerResponse_RUNNING.String() {
 				t.Logf("Container %s confirmed RUNNING.", instanceName)
 				containerIsRunning = true
 				break
 			}
 		}
+		callCancel()
 
 		if containerIsRunning {
 			return nil
 		}
 
 		if pollCtx.Err() != nil {
+			if lastErr != nil {
+				return fmt.Errorf("timed out waiting for container %s to be RUNNING (last error: %v)", instanceName, lastErr)
+			}
 			return fmt.Errorf("timed out waiting for container %s to be RUNNING", instanceName)
 		}
 		time.Sleep(5 * time.Second)

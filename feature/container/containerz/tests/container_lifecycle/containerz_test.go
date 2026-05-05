@@ -13,6 +13,8 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/openconfig/featureprofiles/internal/containerztest"
 	"github.com/openconfig/featureprofiles/internal/deviations"
+	"github.com/openconfig/ondatra/gnmi"
+	"github.com/openconfig/testt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -43,8 +45,10 @@ var (
 )
 
 const (
-	instanceName = "test-instance"
-	imageName    = "cntrsrv_image"
+	instanceName       = "test-instance"
+	imageName          = "cntrsrv_image"
+	maxRebootTime      = 30 * time.Minute
+	rebootPollInterval = 30 * time.Second
 )
 
 func TestMain(m *testing.M) {
@@ -914,6 +918,52 @@ func TestPlugins(t *testing.T) {
 	})
 }
 
+// waitForReboot polls the DUT until it becomes unreachable and then comes back up.
+// After the device recovers, it re-dials GNMI to establish a fresh connection.
+func waitForReboot(t *testing.T, dut *ondatra.DUTDevice) {
+	t.Helper()
+	startReboot := time.Now()
+	t.Log("Polling DUT for reboot completion...")
+	ticker := time.NewTicker(rebootPollInterval)
+	defer ticker.Stop()
+	timeout := time.After(maxRebootTime)
+	var deviceWentDown bool
+
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("DUT did not reboot within %v", maxRebootTime)
+		case <-ticker.C:
+			// Re-dial GNMI on each poll attempt to avoid reusing a dead connection.
+			if deviceWentDown {
+				if _, err := dut.RawAPIs().BindingDUT().DialGNMI(context.Background()); err != nil {
+					t.Logf("Time elapsed %.0f seconds, GNMI dial failed: %v", time.Since(startReboot).Seconds(), err)
+					continue
+				}
+			}
+			errMsg := testt.CaptureFatal(t, func(t testing.TB) {
+				gnmi.Get(t, dut, gnmi.OC().System().CurrentDatetime().State())
+			})
+			if errMsg != nil {
+				if !deviceWentDown {
+					t.Log("Device is now unreachable. Waiting for it to come back up.")
+					deviceWentDown = true
+				}
+				t.Logf("Time elapsed %.0f seconds, DUT not reachable yet.", time.Since(startReboot).Seconds())
+			} else {
+				if deviceWentDown {
+					t.Logf("Device rebooted successfully. Boot time: %.0f seconds.", time.Since(startReboot).Seconds())
+					// Invalidate the cached gNOI client so the next GNOI()
+					// call re-dials instead of returning a stale connection.
+					dut.RawAPIs().ResetGNOI()
+					return
+				}
+				t.Log("Device is still reachable; reboot hasn't started yet.")
+			}
+		}
+	}
+}
+
 // TestContainerPersistenceAfterColdReboot implements CNTR-3.8 checking container persistence after a chassis cold reboot.
 func TestContainerPersistenceAfterColdReboot(t *testing.T) {
 	dut := ondatra.DUT(t, "dut")
@@ -931,8 +981,9 @@ func TestContainerPersistenceAfterColdReboot(t *testing.T) {
 
 	t.Cleanup(func() {
 		t.Log("Starting cleanup...")
-		// Re-initialize client in case of connection loss
-		cli := containerztest.Client(t, dut)
+		// Skip config push -- config was already saved during Setup. Re-pushing
+		// races EOS warmup after a fast reboot ("system not yet initialized").
+		cli := containerztest.ClientWithoutConfig(t, dut)
 		if err := cli.RemoveContainer(ctx, instanceName, true); err != nil && status.Code(err) != codes.NotFound && status.Code(err) != codes.Unknown {
 			t.Errorf("Cleanup: failed to remove container %q: %v", instanceName, err)
 		}
@@ -973,6 +1024,8 @@ func TestContainerPersistenceAfterColdReboot(t *testing.T) {
 		if err := containerztest.DeployAndStart(ctx, t, cli, opts); err != nil {
 			t.Fatalf("Failed to deploy and start container: %v", err)
 		}
+
+		containerztest.SaveConfig(t, dut)
 	})
 
 	t.Run("ColdReboot", func(t *testing.T) {
@@ -990,44 +1043,15 @@ func TestContainerPersistenceAfterColdReboot(t *testing.T) {
 	})
 
 	t.Run("VerifyPersistence", func(t *testing.T) {
-		t.Log("Waiting for DUT to reboot and reconnect...")
+		waitForReboot(t, dut)
 
-		// Wait for reboot.
-		maxRebootTime := 8 * time.Minute
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		timeout := time.After(maxRebootTime)
-		var deviceWentDown bool
+		// Skip config push after reboot -- config was saved to startup-config
+		// during Setup. Re-pushing would restart Octa and make containerz
+		// unavailable.
+		cli = containerztest.ClientWithoutConfig(t, dut)
 
-	rebootLoop:
-		for {
-			select {
-			case <-timeout:
-				t.Fatalf("Timeout exceeded: DUT did not reboot within %v seconds.", maxRebootTime)
-			case <-ticker.C:
-				// use GNOI to refresh the stale cached connection post reboot.
-				sysClient := dut.RawAPIs().GNOI(t).System()
-				_, err := sysClient.Time(ctx, &gspb.TimeRequest{})
-				if err != nil {
-					if !deviceWentDown {
-						t.Logf("Device is now unreachable. Waiting for it to come back up.")
-						deviceWentDown = true
-					}
-				} else {
-					if deviceWentDown {
-						t.Logf("Device rebooted successfully.")
-						break rebootLoop
-					}
-					t.Logf("Device is still reachable; reboot hasn't started yet.")
-				}
-			}
-		}
-
-		// Poll for container state.
-		cli = containerztest.Client(t, dut)
-
-		// Use a generous timeout for the device to come back up and the container to start.
-		if err := containerztest.WaitForRunning(ctx, t, cli, instanceName, 5*time.Minute); err != nil {
+		timeout := 5 * time.Minute
+		if err := containerztest.WaitForRunning(ctx, t, cli, instanceName, timeout); err != nil {
 			t.Errorf("Container persistence failed: %v", err)
 		}
 
