@@ -46,6 +46,13 @@ func Client(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
 				  container runtime
 					 vrf mgmt
 				!
+				management api gnmi
+				  transport grpc iana
+				    port 9339
+				    ssl profile SELFSIGNED
+				    vrf mgmt
+				    authorization requests
+				!
 				ipv6 access-list restrict-access-ipv6
 				  10030 permit tcp any any eq 60061
 				  20000 permit ipv6 any any
@@ -54,6 +61,13 @@ func Client(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
 			`
 		} else {
 			config = `
+				management api gnmi
+				  transport grpc iana
+				    port 9339
+				    ssl profile SELFSIGNED
+				    vrf mgmt
+				    authorization requests
+				!
 				ipv6 access-list restrict-access-ipv6
 				  10030 permit tcp any any eq 60061
 				  20000 permit ipv6 any any

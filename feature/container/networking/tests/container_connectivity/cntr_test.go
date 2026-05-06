@@ -20,6 +20,7 @@ package cntr_test
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"strings"
@@ -37,8 +38,6 @@ import (
 	"github.com/openconfig/ondatra/gnmi"
 	"github.com/openconfig/ondatra/gnmi/oc"
 	"github.com/openconfig/ygot/ygot"
-	"crypto/tls"
-
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/encoding/prototext"
@@ -208,9 +207,15 @@ func TestDialLocal(t *testing.T) {
 	defer gribiClient.Close(t)
 	defer gribiClient.FlushAll(t)
 
-	//Program a sample gRIBI Entry on DUT for gRIBI Get query response.
-	gribiClient.AddNH(t, 2001, "Decap", deviations.DefaultNetworkInstance(dut), fluent.InstalledInFIB)
-	gribiClient.AddNHG(t, 201, map[uint64]uint64{2001: 1}, deviations.DefaultNetworkInstance(dut), fluent.InstalledInFIB)
+	// Program a sample gRIBI entry on DUT for gRIBI Get query response.
+	// Arista does not FIB-program Decap NH in the DEFAULT network instance;
+	// the test accepts an empty gRIBI RIB (EOF) as a successful connection.
+	switch dut.Vendor() {
+	case ondatra.ARISTA:
+	default:
+		gribiClient.AddNH(t, 2001, "Decap", deviations.DefaultNetworkInstance(dut), fluent.InstalledInFIB)
+		gribiClient.AddNHG(t, 201, map[uint64]uint64{2001: 1}, deviations.DefaultNetworkInstance(dut), fluent.InstalledInFIB)
+	}
 
 	tests := []struct {
 		desc     string

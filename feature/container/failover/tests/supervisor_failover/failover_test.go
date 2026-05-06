@@ -94,10 +94,8 @@ func TestImagePersistence(t *testing.T) {
 		// invalidated the gNOI cache, so the next GNOI() will re-dial.
 		cli = containerztest.ClientWithoutConfig(t, dut)
 
-		standbyRPAfter, activeRPAfter, err := findRPs(t, dut)
-		if err != nil {
-			t.Fatalf("Failed to find RPs after switchover: %v", err)
-		}
+		// After switchover, the old active RP reboots as new standby; wait for it.
+		standbyRPAfter, activeRPAfter := findRPsEventually(t, dut, 10*time.Minute)
 		t.Logf("After switchover, found standby RP: %s, active RP: %s", standbyRPAfter, activeRPAfter)
 		if standbyRPAfter != activeRPBefore {
 			t.Errorf("After switchover, standby RP is %s, want %s", standbyRPAfter, activeRPBefore)
@@ -200,10 +198,8 @@ func TestContainerAndVolumePersistence(t *testing.T) {
 		// invalidated the gNOI cache, so the next GNOI() will re-dial.
 		cli = containerztest.ClientWithoutConfig(t, dut)
 
-		standbyRPAfter, activeRPAfter, err := findRPs(t, dut)
-		if err != nil {
-			t.Fatalf("Failed to find RPs after switchover: %v", err)
-		}
+		// After switchover, the old active RP reboots as new standby; wait for it.
+		standbyRPAfter, activeRPAfter := findRPsEventually(t, dut, 10*time.Minute)
 		t.Logf("After switchover, found standby RP: %s, active RP: %s", standbyRPAfter, activeRPAfter)
 		if standbyRPAfter != activeRPBefore {
 			t.Errorf("After switchover, standby RP is %s, want %s", standbyRPAfter, activeRPBefore)
@@ -385,10 +381,8 @@ func TestDoubleFailoverImagePersistence(t *testing.T) {
 	})
 
 	// Second Switchover (back to original active).
-	standbyRP2, activeRP2, err := findRPs(t, dut)
-	if err != nil {
-		t.Fatalf("Failed to find RPs before second switchover: %v", err)
-	}
+	// After the first switchover, the old active RP reboots as new standby; wait for it.
+	standbyRP2, activeRP2 := findRPsEventually(t, dut, 10*time.Minute)
 	if activeRP2 != standbyRP1 {
 		t.Fatalf("Expected new active RP to be %s, but got %s", standbyRP1, activeRP2)
 	}
@@ -478,7 +472,11 @@ func TestContainerPersistenceAfterColdReboot(t *testing.T) {
 		}
 		t.Logf("Before rebooting, standby is %s, active is %s", standbyRP1, activeRP1)
 		switchoverReady := gnmi.OC().Component(standbyRP1).SwitchoverReady()
-		gnmi.Await(t, dut, switchoverReady.State(), 5*time.Minute, true)
+		switchoverReadyTimeout := 5 * time.Minute
+		if dut.Vendor() == ondatra.ARISTA {
+			switchoverReadyTimeout = 30 * time.Minute
+		}
+		gnmi.Await(t, dut, switchoverReady.State(), switchoverReadyTimeout, true)
 		t.Logf("Supervisors synchronized, proceeding with cold reboot")
 
 		// Save running-config to startup-config so the containerz service
@@ -615,7 +613,14 @@ func waitForReboot(t *testing.T, dut *ondatra.DUTDevice) {
 func awaitSwitchoverReadyAndSwitch(t *testing.T, dut *ondatra.DUTDevice, standby string) {
 	t.Helper()
 	switchoverReady := gnmi.OC().Component(standby).SwitchoverReady()
-	gnmi.Await(t, dut, switchoverReady.State(), 5*time.Minute, true)
+	timeout := 5 * time.Minute
+	if dut.Vendor() == ondatra.ARISTA {
+		// Pushing the containerz service config may cause Octa to restart,
+		// temporarily interrupting standby RP synchronization. Allow extra
+		// time for the standby to re-sync before the switchover is triggered.
+		timeout = 30 * time.Minute
+	}
+	gnmi.Await(t, dut, switchoverReady.State(), timeout, true)
 	t.Logf("SwitchoverReady: %v", gnmi.Get(t, dut, switchoverReady.State()))
 	doSwitchover(t, dut, standby)
 }
@@ -652,6 +657,24 @@ func findRPs(t *testing.T, dut *ondatra.DUTDevice) (string, string, error) {
 		return "", "", fmt.Errorf("no active control processor found")
 	}
 	return standbyRP, activeRP, nil
+}
+
+// findRPsEventually retries findRPs until the standby RP appears or the timeout expires.
+// After a switchover, the old active RP takes time to reboot and register as standby.
+func findRPsEventually(t *testing.T, dut *ondatra.DUTDevice, timeout time.Duration) (string, string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		standby, active, err := findRPs(t, dut)
+		if err == nil {
+			return standby, active
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("Standby RP did not appear within %v: %v", timeout, err)
+		}
+		t.Logf("Waiting for standby RP to reappear (will retry): %v", err)
+		time.Sleep(30 * time.Second)
+	}
 }
 
 // verifyContainerState checks if a container exists and is in the expected state.
