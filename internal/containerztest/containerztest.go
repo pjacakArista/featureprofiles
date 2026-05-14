@@ -29,6 +29,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	cpb "github.com/openconfig/gnoi/containerz"
+	"github.com/openconfig/gnoigo"
 )
 
 // Client returns a new containerz client.
@@ -80,8 +81,7 @@ func Client(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
 		// making gNMI temporarily unavailable. Retry write memory until it
 		// succeeds or we exceed the deadline.
 		gnmiSaveWithRetry(t, dut, 2*time.Minute)
-		t.Logf("Waiting for device to ingest its config.")
-		time.Sleep(time.Minute)
+		waitForGNOI(t, dut, 2*time.Minute)
 		// EOS's system control-plane ACL is accepted by EOS but may not translate
 		// to a kernel firewall rule on all EOS versions. Insert a direct ip6tables
 		// ACCEPT rule into the management namespace as a reliable fallback. The
@@ -103,12 +103,15 @@ func Client(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
 	}
 
 	// Re-dial gNOI after config push -- configuring the containerz service may
-	// have restarted Octa, making any prior gNOI connection stale.
-	if _, err := dut.RawAPIs().BindingDUT().DialGNOI(context.Background()); err != nil {
+	// have restarted Octa, making any prior gNOI connection stale. Use the
+	// fresh clients directly rather than GNOI(t), which would return the stale
+	// entry from Ondatra's cache and produce Unavailable errors on the next RPC.
+	freshClients, err := dut.RawAPIs().BindingDUT().DialGNOI(context.Background())
+	if err != nil {
 		t.Logf("gNOI re-dial in Client() failed (non-fatal): %v", err)
+		freshClients = dut.RawAPIs().GNOI(t)
 	}
-	gnoiClient := dut.RawAPIs().GNOI(t)
-	return client.NewClientFromStub(gnoiClient.Containerz())
+	return client.NewClientFromStub(freshClients.Containerz())
 }
 
 // openMgmtPort inserts an ip6tables ACCEPT rule into EOS's management namespace
@@ -131,12 +134,40 @@ func SaveConfig(t *testing.T, dut *ondatra.DUTDevice) {
 
 // ClientWithoutConfig returns a containerz client without pushing any config.
 // Use after a reboot when the config was already saved to startup-config.
-// Caller must invalidate the gNOI cache (via ResetGNOI) before calling this,
-// otherwise GNOI(t) returns a stale connection from before the reboot.
-func ClientWithoutConfig(t *testing.T, dut *ondatra.DUTDevice) *client.Client {
+// Pass the fresh gnoigo.Clients returned by waitForReboot or waitForSwitchover
+// to bypass the stale pre-reboot connection in Ondatra's cache. If no clients
+// are provided, falls back to GNOI(t) (suitable for pre-reboot or cleanup paths).
+func ClientWithoutConfig(t *testing.T, dut *ondatra.DUTDevice, clients ...gnoigo.Clients) *client.Client {
 	t.Helper()
-	gnoiClient := dut.RawAPIs().GNOI(t)
+	var gnoiClient gnoigo.Clients
+	if len(clients) > 0 && clients[0] != nil {
+		gnoiClient = clients[0]
+	} else {
+		gnoiClient = dut.RawAPIs().GNOI(t)
+	}
 	return client.NewClientFromStub(gnoiClient.Containerz())
+}
+
+// waitForGNOI polls DialGNOI until the gNOI endpoint is reachable or the
+// timeout elapses. Used after a config push that may restart Octa.
+func waitForGNOI(t *testing.T, dut *ondatra.DUTDevice, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		// Use a short per-call timeout so DialGNOI does not block indefinitely
+		// while the containerz service is restarting after a config push.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := dut.RawAPIs().BindingDUT().DialGNOI(ctx)
+		cancel()
+		if err == nil {
+			t.Log("containerz gNOI service is reachable.")
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("containerz gNOI service did not become reachable within %v after config push", timeout)
+		}
+		time.Sleep(10 * time.Second)
+	}
 }
 
 // gnmiSaveWithRetry retries "write memory" via gNMI until it succeeds or the

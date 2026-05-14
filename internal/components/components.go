@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -111,6 +112,51 @@ func FindMatchingStrings(components []string, r *regexp.Regexp) []string {
 		}
 	}
 	return s
+}
+
+// AwaitSwitchoverReady waits for the controller card to be ready for switchover.
+// It blocks on the OpenConfig switchover-ready leaf for up to timeout, then for
+// ARISTA DUTs additionally polls "show redundancy status" CLI to confirm the
+// "Ready for switchover" string appears.
+//
+// On ARISTA platforms with fast supervisor boot (e.g. Camp), the gNMI path can
+// become true 2-3 minutes before the device is truly ready to accept
+// SwitchControlProcessor; the CLI gate closes that gap and prevents a transient
+// gNOI Unavailable rejection. The CLI gate uses a separate 5-minute bound and
+// is non-fatal on timeout (proceeds and lets SwitchControlProcessor fail
+// naturally if the device is still not ready).
+func AwaitSwitchoverReady(t *testing.T, dut *ondatra.DUTDevice, controller string, timeout time.Duration) {
+	t.Helper()
+	switchoverReady := gnmi.OC().Component(controller).SwitchoverReady()
+	gnmi.Await(t, dut, switchoverReady.State(), timeout, true)
+	t.Logf("SwitchoverReady: %v", gnmi.Get(t, dut, switchoverReady.State()))
+	if dut.Vendor() == ondatra.ARISTA {
+		awaitARISTACLISwitchoverReady(t, dut, 5*time.Minute)
+	}
+}
+
+// awaitARISTACLISwitchoverReady polls "show redundancy status" until the output
+// contains "Ready for switchover" or the timeout expires. Non-fatal on timeout.
+func awaitARISTACLISwitchoverReady(t *testing.T, dut *ondatra.DUTDevice, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		result := dut.CLI().RunResult(t, "show redundancy status")
+		if result.Error() == "" && strings.Contains(result.Output(), "Ready for switchover") {
+			t.Log("CLI confirms: Ready for switchover")
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Logf("CLI switchover-ready not seen within %v (proceeding anyway)", timeout)
+			return
+		}
+		if result.Error() != "" {
+			t.Logf("CLI 'show redundancy status' error: %s; retrying in 30s", result.Error())
+		} else {
+			t.Log("CLI: not yet ready for switchover, retrying in 30s")
+		}
+		time.Sleep(30 * time.Second)
+	}
 }
 
 // GetSubcomponentPath creates a gNMI path based on the component name.
