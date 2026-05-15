@@ -226,6 +226,11 @@ func TestImageRemovalPersistence(t *testing.T) {
 
 	cli := containerztest.Client(t, dut)
 
+	// Remove any containers left over from other tests that use the same image.
+	// Without this, RemoveImage fails with "has a running container" when the
+	// same DUT is reused across tests (e.g. after running CNTR-1).
+	removeContainersUsingImage(ctx, t, cli, imageName, tag)
+
 	// 1. Load the image initially.
 	t.Run("LoadImage", func(t *testing.T) {
 		if err := loadImage(ctx, t, cli, imageName, tag, containerTarPath(t)); err != nil {
@@ -900,6 +905,34 @@ func poll(t *testing.T, desc string, timeout time.Duration, check func() error) 
 		case <-ticker.C:
 			if err := check(); err == nil {
 				return nil // Success
+			}
+		}
+	}
+}
+
+// removeContainersUsingImage removes all containers that use the given image so
+// that a subsequent RemoveImage call can succeed without a "running container"
+// error. This guards against cross-test DUT contamination when the same DUT is
+// reused across tests (e.g. CNTR-1's TestContainerPersistenceAfterColdReboot
+// leaves a container running with restart-policy Always, which would block
+// CNTR-3's TestImageRemovalPersistence from removing the image).
+func removeContainersUsingImage(ctx context.Context, t *testing.T, cli *client.Client, imageName, tag string) {
+	t.Helper()
+	wantImage := imageName + ":" + tag
+	ch, err := cli.ListContainer(ctx, true, 0, nil)
+	if err != nil {
+		t.Logf("Pre-cleanup: ListContainer failed: %v", err)
+		return
+	}
+	for info := range ch {
+		if info.Error != nil {
+			continue
+		}
+		if info.ImageName == wantImage {
+			name := strings.TrimPrefix(info.Name, "/")
+			t.Logf("Pre-cleanup: removing container %q using image %s", name, wantImage)
+			if err := cli.RemoveContainer(ctx, name, true); err != nil {
+				t.Logf("Pre-cleanup: failed to remove container %q: %v", name, err)
 			}
 		}
 	}
