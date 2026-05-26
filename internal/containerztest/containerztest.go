@@ -133,7 +133,9 @@ func gnmiSaveWithRetry(t *testing.T, dut *ondatra.DUTDevice, timeout time.Durati
 		if err != nil {
 			t.Fatalf("Cannot build gNMI SetRequest for write memory: %v", err)
 		}
-		_, err = gnmiClient.Set(context.Background(), req)
+		setCtx, setCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err = gnmiClient.Set(setCtx, req)
+		setCancel()
 		if err == nil {
 			t.Logf("write memory succeeded (attempt %d)", attempt)
 			return
@@ -323,11 +325,15 @@ func Setup(ctx context.Context, t *testing.T, dut *ondatra.DUTDevice, opts Start
 	t.Logf("Container %q started successfully.", opts.InstanceName)
 
 	return cli, func() {
-		Stop(ctx, t, cli, opts.InstanceName)
+		// Use a fresh context so cleanup succeeds even if the test context was
+		// canceled (e.g. on timeout).
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 1*time.Minute)
+		defer cleanupCancel()
+		Stop(cleanupCtx, t, cli, opts.InstanceName)
 		// Remove the container so it does not persist on the DUT in STOPPED
 		// state. Without removal, Docker may restart a previously-running
 		// container on its next daemon restart, contaminating subsequent tests.
-		if err := cli.RemoveContainer(ctx, opts.InstanceName, true); err != nil {
+		if err := cli.RemoveContainer(cleanupCtx, opts.InstanceName, true); err != nil {
 			s, _ := status.FromError(err)
 			if s.Code() != codes.NotFound {
 				t.Logf("RemoveContainer %s encountered an issue: %v", opts.InstanceName, err)
