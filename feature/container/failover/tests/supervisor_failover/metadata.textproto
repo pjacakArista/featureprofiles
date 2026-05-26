@@ -12,14 +12,17 @@ platform_exceptions: {
   }
   deviations: {
     containerz_oc_unsupported: true
+    gnoi_subcomponent_path: true
+    containerz_post_switchover_verify_timeout_s: 900
+    containerz_switchover_ready_timeout_s: 1800
+    containerz_switchover_retry_timeout_s: 900
   }
 }
-
 platform_exceptions: {
   platform: {
     vendor: NOKIA
   }
   deviations: {
     localhost_for_containerz: true
-  }  
+  }
 }

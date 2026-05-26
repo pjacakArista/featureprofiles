@@ -1370,6 +1370,20 @@ message Metadata {
     // be verified against a trusted CA. When true, dialContainer uses TLS with
     // InsecureSkipVerify instead of plaintext transport.
     bool containerz_tls_insecure_skip_verify = 433;
+
+    // Timeout in seconds for post-switchover/reboot container and image verification.
+    // Supervisors may restart containerz after a switchover; the new active needs extra
+    // time for Docker state to settle. Default 0 means test uses 5 minutes.
+    uint32 containerz_post_switchover_verify_timeout_s = 434;
+
+    // Timeout in seconds for the switchover-ready OC leaf polling before triggering
+    // SwitchControlProcessor. Config push may cause Octa to restart, temporarily
+    // interrupting standby sync. Default 0 means test uses 5 minutes.
+    uint32 containerz_switchover_ready_timeout_s = 435;
+
+    // Timeout in seconds for retrying the SwitchControlProcessor gRPC call when the
+    // device returns Unavailable. Default 0 means test uses 5 minutes.
+    uint32 containerz_switchover_retry_timeout_s = 436;
     // Reserved field numbers and identifiers.
     reserved 84, 9, 28, 20, 38, 43, 90, 97, 55, 89, 19, 36, 35, 40, 113, 131, 141, 173, 234, 254, 231, 300, 241, 49;
   }

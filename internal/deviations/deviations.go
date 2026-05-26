@@ -1896,6 +1896,27 @@ func ContainerzTLSInsecureSkipVerify(dut *ondatra.DUTDevice) bool {
 	return lookupDUTDeviations(dut).GetContainerzTlsInsecureSkipVerify()
 }
 
+// ContainerzPostSwitchoverVerifyTimeoutS returns the timeout in seconds for
+// post-switchover/reboot container and image verification. Default 0 means the
+// test uses 5 minutes.
+func ContainerzPostSwitchoverVerifyTimeoutS(dut *ondatra.DUTDevice) uint32 {
+	return lookupDUTDeviations(dut).GetContainerzPostSwitchoverVerifyTimeoutS()
+}
+
+// ContainerzSwitchoverReadyTimeoutS returns the timeout in seconds for polling
+// the switchover-ready OC leaf before triggering SwitchControlProcessor.
+// Default 0 means the test uses 5 minutes.
+func ContainerzSwitchoverReadyTimeoutS(dut *ondatra.DUTDevice) uint32 {
+	return lookupDUTDeviations(dut).GetContainerzSwitchoverReadyTimeoutS()
+}
+
+// ContainerzSwitchoverRetryTimeoutS returns the timeout in seconds for
+// retrying the SwitchControlProcessor gRPC call when the device returns
+// Unavailable. Default 0 means the test uses 5 minutes.
+func ContainerzSwitchoverRetryTimeoutS(dut *ondatra.DUTDevice) uint32 {
+	return lookupDUTDeviations(dut).GetContainerzSwitchoverRetryTimeoutS()
+}
+
 // TemperatureSensorCheck returns true if the transceiver subcomponent should look for the temperature sensor
 func TemperatureSensorCheck(dut *ondatra.DUTDevice) bool {
 	return lookupDUTDeviations(dut).GetTemperatureSensorCheck()

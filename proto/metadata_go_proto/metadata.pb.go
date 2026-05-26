@@ -1481,8 +1481,19 @@ type Metadata_Deviations struct {
 	// be verified against a trusted CA. When true, dialContainer uses TLS with
 	// InsecureSkipVerify instead of plaintext transport.
 	ContainerzTlsInsecureSkipVerify bool `protobuf:"varint,433,opt,name=containerz_tls_insecure_skip_verify,json=containerzTlsInsecureSkipVerify,proto3" json:"containerz_tls_insecure_skip_verify,omitempty"`
-	unknownFields                   protoimpl.UnknownFields
-	sizeCache                       protoimpl.SizeCache
+	// Timeout in seconds for post-switchover/reboot container and image verification.
+	// Supervisors may restart containerz after a switchover; the new active needs extra
+	// time for Docker state to settle. Default 0 means test uses 5 minutes.
+	ContainerzPostSwitchoverVerifyTimeoutS uint32 `protobuf:"varint,434,opt,name=containerz_post_switchover_verify_timeout_s,json=containerzPostSwitchoverVerifyTimeoutS,proto3" json:"containerz_post_switchover_verify_timeout_s,omitempty"`
+	// Timeout in seconds for the switchover-ready OC leaf polling before triggering
+	// SwitchControlProcessor. Config push may cause Octa to restart, temporarily
+	// interrupting standby sync. Default 0 means test uses 5 minutes.
+	ContainerzSwitchoverReadyTimeoutS uint32 `protobuf:"varint,435,opt,name=containerz_switchover_ready_timeout_s,json=containerzSwitchoverReadyTimeoutS,proto3" json:"containerz_switchover_ready_timeout_s,omitempty"`
+	// Timeout in seconds for retrying the SwitchControlProcessor gRPC call when the
+	// device returns Unavailable. Default 0 means test uses 5 minutes.
+	ContainerzSwitchoverRetryTimeoutS uint32 `protobuf:"varint,436,opt,name=containerz_switchover_retry_timeout_s,json=containerzSwitchoverRetryTimeoutS,proto3" json:"containerz_switchover_retry_timeout_s,omitempty"`
+	unknownFields                     protoimpl.UnknownFields
+	sizeCache                         protoimpl.SizeCache
 }
 
 func (x *Metadata_Deviations) Reset() {
@@ -4301,6 +4312,27 @@ func (x *Metadata_Deviations) GetContainerzTlsInsecureSkipVerify() bool {
 	return false
 }
 
+func (x *Metadata_Deviations) GetContainerzPostSwitchoverVerifyTimeoutS() uint32 {
+	if x != nil {
+		return x.ContainerzPostSwitchoverVerifyTimeoutS
+	}
+	return 0
+}
+
+func (x *Metadata_Deviations) GetContainerzSwitchoverReadyTimeoutS() uint32 {
+	if x != nil {
+		return x.ContainerzSwitchoverReadyTimeoutS
+	}
+	return 0
+}
+
+func (x *Metadata_Deviations) GetContainerzSwitchoverRetryTimeoutS() uint32 {
+	if x != nil {
+		return x.ContainerzSwitchoverRetryTimeoutS
+	}
+	return 0
+}
+
 type Metadata_PlatformExceptions struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Platform      *Metadata_Platform     `protobuf:"bytes,1,opt,name=platform,proto3" json:"platform,omitempty"`
@@ -4357,7 +4389,7 @@ var File_metadata_proto protoreflect.FileDescriptor
 
 const file_metadata_proto_rawDesc = "" +
 	"\n" +
-	"\x0emetadata.proto\x12\x12openconfig.testing\x1a1github.com/openconfig/ondatra/proto/testbed.proto\"\xde\xf2\x01\n" +
+	"\x0emetadata.proto\x12\x12openconfig.testing\x1a1github.com/openconfig/ondatra/proto/testbed.proto\"\xe2\xf4\x01\n" +
 	"\bMetadata\x12\x12\n" +
 	"\x04uuid\x18\x01 \x01(\tR\x04uuid\x12\x17\n" +
 	"\aplan_id\x18\x02 \x01(\tR\x06planId\x12 \n" +
@@ -4369,7 +4401,7 @@ const file_metadata_proto_rawDesc = "" +
 	"\bPlatform\x12.\n" +
 	"\x06vendor\x18\x01 \x01(\x0e2\x16.ondatra.Device.VendorR\x06vendor\x120\n" +
 	"\x14hardware_model_regex\x18\x03 \x01(\tR\x12hardwareModelRegex\x124\n" +
-	"\x16software_version_regex\x18\x04 \x01(\tR\x14softwareVersionRegexJ\x04\b\x02\x10\x03R\x0ehardware_model\x1a\xaa\xe8\x01\n" +
+	"\x16software_version_regex\x18\x04 \x01(\tR\x14softwareVersionRegexJ\x04\b\x02\x10\x03R\x0ehardware_model\x1a\xae\xea\x01\n" +
 	"\n" +
 	"Deviations\x120\n" +
 	"\x14ipv4_missing_enabled\x18\x01 \x01(\bR\x12ipv4MissingEnabled\x129\n" +
@@ -4773,7 +4805,10 @@ const file_metadata_proto_rawDesc = "" +
 	"%gnoi_bgp_graceful_restart_unsupported\x18\xae\x03 \x01(\bR!gnoiBgpGracefulRestartUnsupported\x12:\n" +
 	"\x19dhcp_relay_oc_unsupported\x18\xaf\x03 \x01(\bR\x16dhcpRelayOcUnsupported\x12P\n" +
 	"%gribi_decap_in_default_ni_unsupported\x18\xb0\x03 \x01(\bR gribiDecapInDefaultNiUnsupported\x12M\n" +
-	"#containerz_tls_insecure_skip_verify\x18\xb1\x03 \x01(\bR\x1fcontainerzTlsInsecureSkipVerifyJ\x04\bT\x10UJ\x04\b\t\x10\n" +
+	"#containerz_tls_insecure_skip_verify\x18\xb1\x03 \x01(\bR\x1fcontainerzTlsInsecureSkipVerify\x12\\\n" +
+	"+containerz_post_switchover_verify_timeout_s\x18\xb2\x03 \x01(\rR&containerzPostSwitchoverVerifyTimeoutS\x12Q\n" +
+	"%containerz_switchover_ready_timeout_s\x18\xb3\x03 \x01(\rR!containerzSwitchoverReadyTimeoutS\x12Q\n" +
+	"%containerz_switchover_retry_timeout_s\x18\xb4\x03 \x01(\rR!containerzSwitchoverRetryTimeoutSJ\x04\bT\x10UJ\x04\b\t\x10\n" +
 	"J\x04\b\x1c\x10\x1dJ\x04\b\x14\x10\x15J\x04\b&\x10'J\x04\b+\x10,J\x04\bZ\x10[J\x04\ba\x10bJ\x04\b7\x108J\x04\bY\x10ZJ\x04\b\x13\x10\x14J\x04\b$\x10%J\x04\b#\x10$J\x04\b(\x10)J\x04\bq\x10rJ\x06\b\x83\x01\x10\x84\x01J\x06\b\x8d\x01\x10\x8e\x01J\x06\b\xad\x01\x10\xae\x01J\x06\b\xea\x01\x10\xeb\x01J\x06\b\xfe\x01\x10\xff\x01J\x06\b\xe7\x01\x10\xe8\x01J\x06\b\xac\x02\x10\xad\x02J\x06\b\xf1\x01\x10\xf2\x01J\x04\b1\x102\x1a\xa0\x01\n" +
 	"\x12PlatformExceptions\x12A\n" +
 	"\bplatform\x18\x01 \x01(\v2%.openconfig.testing.Metadata.PlatformR\bplatform\x12G\n" +
