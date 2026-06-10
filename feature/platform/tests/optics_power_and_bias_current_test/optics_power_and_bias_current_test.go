@@ -208,6 +208,7 @@ func TestOpticsPowerBiasCurrent(t *testing.T) {
 		t.Fatalf("Populated transceiver list for %q: got 0, want > 0", dut.Model())
 	}
 
+	var opticalTested int
 	for _, transceiver := range populated {
 		t.Run(transceiver, func(t *testing.T) {
 			component := gnmi.OC().Component(transceiver)
@@ -223,6 +224,12 @@ func TestOpticsPowerBiasCurrent(t *testing.T) {
 					return
 				}
 			}
+
+			if ct, ok := gnmi.Lookup(t, dut, component.Transceiver().ConnectorType().State()).Val(); ok && ct == oc.TransportTypes_FIBER_CONNECTOR_TYPE_DAC_CONNECTOR {
+				t.Logf("Transceiver %s: connector-type is %s, skipping (non-optical transceiver)", transceiver, ct)
+				return
+			}
+			opticalTested++
 
 			inputPowers := gnmi.CollectAll(t, gnmiOpts(t, dut, gpb.SubscriptionMode_SAMPLE, time.Second*30, deviations.CiscoxrTransceiverFt(dut)), component.Transceiver().ChannelAny().InputPower().Instant().State(), time.Second*30).Await(t)
 			t.Logf("Transceiver %s inputPowers: %v", transceiver, inputPowers)
@@ -294,6 +301,9 @@ func TestOpticsPowerBiasCurrent(t *testing.T) {
 				validateThresholds(t, dut, transceiver, isPortUp, sev, component, opts)
 			}
 		})
+	}
+	if opticalTested == 0 {
+		t.Fatalf("No optical transceivers tested on %q: all populated transceivers were non-optical or admin-down", dut.Model())
 	}
 }
 
