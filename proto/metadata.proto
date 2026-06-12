@@ -1425,11 +1425,14 @@ message Metadata {
     // Arista: https://partnerissuetracker.corp.google.com/u/2/issues/534817001
     bool bgp_dynamic_neighbor_prefix_unsupported = 447;
 
+    // Device requires certificate-id to be set on gRPC server when transport-security is enabled.
+    // Arista: https://issuetracker.google.com/issues/XXXXXXXXX
+    string grpc_server_certificate_id = 456;
+
     // Device containerz service presents a self-signed TLS certificate that cannot
     // be verified against a trusted CA. When true, dialContainer uses TLS with
     // InsecureSkipVerify instead of plaintext transport.
     bool containerz_tls_insecure_skip_verify = 448;
-
     // Devices that do not validate AFT global filter policy references.
     // Arista: https://partnerissuetracker.corp.google.com/issues/491765154#comment10
     bool afts_global_filter_policy_config_reference_validation_unsupported = 449;
