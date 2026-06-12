@@ -2210,6 +2210,12 @@ func RequireTransportSecurity(dut *ondatra.DUTDevice) bool {
 	return lookupDUTDeviations(dut).GetRequireTransportSecurity()
 }
 
+// GrpcServerCertificateId returns the certificate-id to set on gRPC server when
+// transport-security is enabled. Empty string means no certificate-id is needed.
+func GrpcServerCertificateId(dut *ondatra.DUTDevice) string {
+	return lookupDUTDeviations(dut).GetGrpcServerCertificateId()
+}
+
 // ExtendedRouteRetentionOcUnsupported returns true if devices do not support extended Route Retention.
 // Use the deviation if BGP Extension Route Retention configuration is not available via OC
 func ExtendedRouteRetentionOcUnsupported(dut *ondatra.DUTDevice) bool {
