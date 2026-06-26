@@ -69,6 +69,12 @@ func CreateGNMIServer(t testing.TB, d *ondatra.DUTDevice, batch *gnmi.SetBatch, 
 		gnmiServer.Services = []oc.E_SystemGrpc_GRPC_SERVICE{oc.SystemGrpc_GRPC_SERVICE_GNMI}
 	}
 	gnmi.BatchUpdate(batch, gnmiServerPath.Config(), gnmiServer)
+	if transportSec {
+		switch d.Vendor() {
+		case ondatra.ARISTA:
+			gnmi.BatchUpdate(batch, gnmiServerPath.CertificateId().Config(), "SELFSIGNED")
+		}
+	}
 }
 
 // FindLineCardParent traverses up the component hierarchy starting from the given component name
